@@ -120,20 +120,27 @@ local THREAD_COUNT = 8
 
 local loaded, thisThreadId = ...
 if loaded == true then
-  local requestParams, resource
   local done = false
 
   local doneChannel = love.thread.getChannel(CHANNEL_PREFIX  .. thisThreadId .. "_is_done")
 
   while not done do
 
-    for _,kind in pairs(resourceKinds) do
-      local loader = love.thread.getChannel(CHANNEL_PREFIX .. kind.requestKey)
-      requestParams = loader:pop()
-      if requestParams then
-        resource = kind.constructor(unpack(requestParams))
+    for kindName,kind in pairs(resourceKinds) do
+      local requestQueue = love.thread.getChannel(CHANNEL_PREFIX .. kind.requestKey)
+      local task = requestQueue:pop()
+
+      if task then
+        local requestParams = task.requestParams
+        --print("["..thisThreadId.."] Loading "..kindName.."( "..table.concat(requestParams, ", ").." )")
+        local resource = kind.constructor(unpack(requestParams))
+        --print("["..thisThreadId.."] Loaded!!! "..kindName.."( "..table.concat(requestParams, ", ").." )")
         local producer = love.thread.getChannel(CHANNEL_PREFIX .. kind.resourceKey)
-        producer:push(resource)
+        producer:push({
+          result = resource,
+        -- it's state is not thread-safe, so don't access - just pass back in result
+          resourceBeingLoaded = task.resourceBeingLoaded
+        })
       end
     end
 
@@ -144,7 +151,9 @@ else
 
   local pending = {}
   local callbacks = {}
-  local resourceBeingLoaded
+  local resourceBeingLoadedCount = 0
+  local shelf = {}
+  local prevShelfId = 0
 
   local pathToThisFile = (...):gsub("%.", "/") .. ".lua"
 
@@ -158,26 +167,48 @@ else
     }
   end
 
+  local function putToShelf(obj)
+    local shelfId = prevShelfId + 1;
+    prevShelfId = shelfId
+    shelf[shelfId] = obj
+    return shelfId
+  end
+
+  local function takeFromShelf(id)
+    local obj = shelf[id]
+    shelf[id] = nil
+    return obj
+  end
+
   local function getResourceFromThreadIfAvailable()
     local data, resource
     for name,kind in pairs(resourceKinds) do
       local channel = love.thread.getChannel(CHANNEL_PREFIX .. kind.resourceKey)
       data = channel:pop()
       if data then
-        resource = kind.postProcess and kind.postProcess(data, resourceBeingLoaded) or data
+        local resourceBeingLoaded = takeFromShelf(data.resourceBeingLoaded)
+        --print("Dequeueing "..resourceBeingLoaded.kind.."( "..table.concat(resourceBeingLoaded.requestParams, ", ").." )")
+        assert(data.result)
+        resource = kind.postProcess and kind.postProcess(data.result, resourceBeingLoaded) or data.result
         resourceBeingLoaded.holder[resourceBeingLoaded.key] = resource
         loader.loadedCount = loader.loadedCount + 1
         callbacks.oneLoaded(resourceBeingLoaded.kind, resourceBeingLoaded.holder, resourceBeingLoaded.key)
-        resourceBeingLoaded = nil
+        resourceBeingLoadedCount = resourceBeingLoadedCount - 1
       end
     end
   end
 
   local function requestNewResourceToThread()
-    resourceBeingLoaded = shift(pending)
+    local resourceBeingLoaded = shift(pending)
+    resourceBeingLoadedCount = resourceBeingLoadedCount + 1
     local requestKey = resourceKinds[resourceBeingLoaded.kind].requestKey
     local channel = love.thread.getChannel(CHANNEL_PREFIX .. requestKey)
-    channel:push(resourceBeingLoaded.requestParams)
+    --print("Enqueueing "..resourceBeingLoaded.kind.."( "..table.concat(resourceBeingLoaded.requestParams, ", ").." )")
+
+    channel:push({
+      resourceBeingLoaded = putToShelf(resourceBeingLoaded),
+      requestParams = resourceBeingLoaded.requestParams
+    })
   end
 
   -----------------------------------------------------
@@ -239,10 +270,13 @@ else
         local errorMessage = thread:getError()
         assert(not errorMessage, errorMessage)
       end
-      if resourceBeingLoaded then
-        getResourceFromThreadIfAvailable()
-      elseif resourceBeingLoaded or #pending > 0 then
-        requestNewResourceToThread()
+      if resourceBeingLoadedCount > 0 or #pending > 0 then
+        if resourceBeingLoadedCount > 0 then
+          getResourceFromThreadIfAvailable()
+        end
+        if #pending > 0 then
+          requestNewResourceToThread()
+        end
       else
         for threadId, thread in pairs(loader.threads) do
           love.thread.getChannel(CHANNEL_PREFIX  .. threadId .. "_is_done"):push(true)
