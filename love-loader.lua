@@ -116,7 +116,9 @@ local resourceKinds = {
 }
 
 local CHANNEL_PREFIX = "loader_"
-local THREAD_COUNT = 8
+
+-- on my data multithreading doesn't give any benefits. the key of speed is async communication between main and loader threads.
+local THREAD_COUNT = 1
 
 local loaded, thisThreadId = ...
 if loaded == true then
