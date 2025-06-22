@@ -44,9 +44,19 @@ local resourceKinds = {
         return love.image.newImageData(path)
       end
     end,
-    postProcess = function(data)
+    --[[postProcess = function(data)
       return love.graphics.newImage(data)
+    end]]
+    
+    -- FIX from 3freamengine developer
+     postProcess = function(data)
+		local img = love.graphics.newImage(data)
+		img:setWrap("repeat", "repeat")
+		img:setFilter("nearest")
+		return img
     end
+   --/ 
+    
   },
   staticSource = {
     requestKey  = "staticPath",
@@ -102,17 +112,7 @@ local resourceKinds = {
     requestKey  = "compressedDataPath",
     resourceKey = "rawCompressedData",
     constructor = love.image.newCompressedData
-  },
-  rawData = {
-    requestKey  = "rawDataPath",
-    resourceKey = "rawData",
-    constructor = love.filesystem.read
-  },
-  video = {
-		requestKey  = "videoDataPath",
-		resourceKey = "video",
-		constructor = love.graphics.newVideo
-	}
+  }
 }
 
 local CHANNEL_PREFIX = "loader_"
@@ -146,9 +146,6 @@ else
   local resourceBeingLoaded
 
   local pathToThisFile = (...):gsub("%.", "/") .. ".lua"
-  if love.filesystem.getInfo(pathToThisFile) == nil and type(debug) == "table" and type(debug.getinfo) == "function" then
-    pathToThisFile = debug.getinfo(1).source:match("@?(.*)")
-  end
 
   local function shift(t)
     return table.remove(t,1)
@@ -215,13 +212,9 @@ else
   function loader.newImageData(holder, key, path)
     newResource('imageData', holder, key, path)
   end
-
+  
   function loader.newCompressedData(holder, key, path)
     newResource('compressedData', holder, key, path)
-  end
-
-  function loader.read(holder, key, path)
-    newResource('rawData', holder, key, path)
   end
 
   function loader.start(allLoadedCallback, oneLoadedCallback)
