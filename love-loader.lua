@@ -116,13 +116,14 @@ local resourceKinds = {
 }
 
 local CHANNEL_PREFIX = "loader_"
+local THREAD_COUNT = 8
 
-local loaded = ...
+local loaded, thisThreadId = ...
 if loaded == true then
   local requestParams, resource
   local done = false
 
-  local doneChannel = love.thread.getChannel(CHANNEL_PREFIX .. "is_done")
+  local doneChannel = love.thread.getChannel(CHANNEL_PREFIX  .. thisThreadId .. "_is_done")
 
   while not done do
 
@@ -179,13 +180,6 @@ else
     channel:push(resourceBeingLoaded.requestParams)
   end
 
-  local function endThreadIfAllLoaded()
-    if not resourceBeingLoaded and #pending == 0 then
-      love.thread.getChannel(CHANNEL_PREFIX .. "is_done"):push(true)
-      callbacks.allLoaded()
-    end
-  end
-
   -----------------------------------------------------
 
   function loader.newImage(holder, key, path)
@@ -222,28 +216,40 @@ else
     callbacks.allLoaded = allLoadedCallback or function() end
     callbacks.oneLoaded = oneLoadedCallback or function() end
 
-    local thread = love.thread.newThread(pathToThisFile)
-
     loader.loadedCount = 0
     loader.resourceCount = #pending
-    thread:start(true)
-    loader.thread = thread
+    loader.threadCount = 0
+    loader.threads = {}
+
+    for i = 1, THREAD_COUNT, 1 do
+      local threadId = tostring(i)
+      local thread = love.thread.newThread(pathToThisFile)
+
+      loader.threads[threadId] = thread
+      loader.threadCount = loader.threadCount + 1
+
+      thread:start(true, threadId)
+    end
+
   end
 
   function loader.update()
-    if loader.thread then
-      if loader.thread:isRunning() then
-        if resourceBeingLoaded then
-          getResourceFromThreadIfAvailable()
-        elseif #pending > 0 then
-          requestNewResourceToThread()
-        else
-          endThreadIfAllLoaded()
-          loader.thread = nil
-        end
-      else
-        local errorMessage = loader.thread:getError()
+    if loader.threadCount > 0 then
+      for threadId, thread in pairs(loader.threads) do
+        local errorMessage = thread:getError()
         assert(not errorMessage, errorMessage)
+      end
+      if resourceBeingLoaded then
+        getResourceFromThreadIfAvailable()
+      elseif resourceBeingLoaded or #pending > 0 then
+        requestNewResourceToThread()
+      else
+        for threadId, thread in pairs(loader.threads) do
+          love.thread.getChannel(CHANNEL_PREFIX  .. threadId .. "_is_done"):push(true)
+          loader.threads[threadId] = nil
+          loader.threadCount = loader.threadCount - 1
+        end
+        callbacks.allLoaded()
       end
     end
   end
