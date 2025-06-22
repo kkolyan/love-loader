@@ -158,6 +158,7 @@ else
   end
 
   local function getResourceFromThreadIfAvailable()
+    local got = 0
     local data, resource
     for name,kind in pairs(resourceKinds) do
       local channel = love.thread.getChannel(CHANNEL_PREFIX .. kind.resourceKey)
@@ -168,8 +169,10 @@ else
         loader.loadedCount = loader.loadedCount + 1
         callbacks.oneLoaded(resourceBeingLoaded.kind, resourceBeingLoaded.holder, resourceBeingLoaded.key)
         resourceBeingLoaded = nil
+        got = got + 1
       end
     end
+    return got
   end
 
   local function requestNewResourceToThread()
@@ -233,11 +236,20 @@ else
   function loader.update()
     if loader.thread then
       if loader.thread:isRunning() then
-        if resourceBeingLoaded then
-          getResourceFromThreadIfAvailable()
-        elseif #pending > 0 then
-          requestNewResourceToThread()
-        else
+
+        while true do
+          if resourceBeingLoaded then
+            local got = getResourceFromThreadIfAvailable()
+            if got <= 0 then
+              break
+            end
+          elseif #pending > 0 then
+            requestNewResourceToThread()
+          else
+            break
+          end
+        end
+        if not resourceBeingLoaded and #pending <= 0 then
           endThreadIfAllLoaded()
           loader.thread = nil
         end
